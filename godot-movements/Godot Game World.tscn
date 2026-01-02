@@ -1,0 +1,234 @@
+[gd_scene load_steps=12 format=3 uid="uid://dugwj8ugptb4b"]
+
+[ext_resource type="Texture2D" uid="uid://0xesu0n8f6e7" path="res://texture_05 (1).png" id="1_pwwfg"]
+[ext_resource type="PackedScene" uid="uid://dglsjlntcrb7w" path="res://final_skeleton.tscn" id="2_pwwfg"]
+[ext_resource type="Script" uid="uid://dg4uv3hhjmov7" path="res://Camera_Controller.gd" id="3_rcan8"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_vip2u"]
+sky_horizon_color = Color(0.662243, 0.671743, 0.686743, 1)
+ground_horizon_color = Color(0.662243, 0.671743, 0.686743, 1)
+
+[sub_resource type="Sky" id="Sky_e8gkw"]
+sky_material = SubResource("ProceduralSkyMaterial_vip2u")
+
+[sub_resource type="Environment" id="Environment_pwwfg"]
+background_mode = 1
+background_color = Color(0.538481, 0.688566, 1, 1)
+sky = SubResource("Sky_e8gkw")
+sky_custom_fov = 73.0
+ambient_light_energy = 0.0
+tonemap_mode = 2
+glow_enabled = true
+fog_density = 0.0
+fog_sky_affect = 0.0
+fog_height = 0.3
+fog_height_density = 6.921
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_rcan8"]
+albedo_texture = ExtResource("1_pwwfg")
+uv1_triplanar = true
+
+[sub_resource type="GDScript" id="GDScript_pwwfg"]
+script/source = "extends CharacterBody3D
+
+@onready var anim_tree = $Animations/AnimationTree
+
+enum {IDLE, RUN}
+var curAnim = IDLE
+
+# Rolling variables
+var is_rolling = false
+var roll_timer = 0.0
+const ROLL_DURATION = 1.08
+const FAST_PHASE_DURATION = 0.75
+var roll_direction = Vector3.ZERO
+
+func handle_animations():
+	match curAnim:
+		IDLE:
+			anim_tree.set(\"parameters/Movement/transition_request\", \"Idle\")
+		RUN:
+			anim_tree.set(\"parameters/Movement/transition_request\", \"Run\")
+
+func jump():
+	anim_tree.set(\"parameters/Jump/request\", AnimationNodeOneShot.ONE_SHOT_REQUEST_FIRE)
+
+func roll():
+	if not is_rolling:
+		# Only allow roll if a movement direction is selected
+		var input_dir = Vector3.ZERO
+		if Input.is_action_pressed(\"right\"):
+			input_dir.x += 1
+		if Input.is_action_pressed(\"left\"):
+			input_dir.x -= 1
+		if Input.is_action_pressed(\"down\"):
+			input_dir.z += 1
+		if Input.is_action_pressed(\"up\"):
+			input_dir.z -= 1
+
+		if input_dir == Vector3.ZERO:
+			return  # No direction pressed, do not roll
+
+		is_rolling = true
+		roll_timer = 0.0
+
+		input_dir = input_dir.normalized()
+
+		if camera_node != null:
+			var cam_forward = -camera_node.global_transform.basis.z
+			cam_forward.y = 0
+			cam_forward = cam_forward.normalized()
+
+			var cam_right = camera_node.global_transform.basis.x
+			cam_right.y = 0
+			cam_right = cam_right.normalized()
+
+			roll_direction = (cam_forward * -input_dir.z + cam_right * input_dir.x).normalized()
+		else:
+			roll_direction = -transform.basis.z.normalized()
+
+		anim_tree.set(\"parameters/Roll/request\", AnimationNodeOneShot.ONE_SHOT_REQUEST_FIRE)
+
+@export var move_speed: float = 8
+@export var jump_speed: float = 6
+@export var gravity: float = -9.8
+@export var rotation_speed: float = 8.0  # Rotation smoothing speed
+
+var camera_node: Node3D
+
+func _ready():
+	var camera_nodes = get_tree().get_nodes_in_group(\"camera_node_path\")
+	if camera_nodes.size() > 0:
+		camera_node = camera_nodes[0]
+	else:
+		push_error(\"No camera node found in group 'camera_node_path'\")
+
+func _physics_process(delta):
+	handle_animations()
+
+	if is_rolling:
+		roll_timer += delta
+		var speed = 0.0
+
+		if roll_timer <= FAST_PHASE_DURATION:
+			speed = 12.0  # Fast burst
+		else:
+			speed = 1.5  # Slow phase
+
+		velocity.x = roll_direction.x * speed
+		velocity.z = roll_direction.z * speed
+
+		# Keep character grounded while rolling
+		if is_on_floor():
+			velocity.y = 0
+			# Snap position y to floor height to avoid any floating
+			var floor_height = global_transform.origin.y
+			global_transform.origin.y = floor_height
+		else:
+			velocity.y += gravity * delta
+
+		if roll_timer >= ROLL_DURATION:
+			is_rolling = false
+			roll_timer = 0.0
+
+		move_and_slide()
+		return
+
+	var input_dir = Vector3.ZERO
+
+	if Input.is_action_pressed(\"right\"):
+		input_dir.x += 1
+	if Input.is_action_pressed(\"left\"):
+		input_dir.x -= 1
+	if Input.is_action_pressed(\"down\"):
+		input_dir.z += 1
+	if Input.is_action_pressed(\"up\"):
+		input_dir.z -= 1
+
+	if Input.is_action_pressed(\"right\") or Input.is_action_pressed(\"left\") or Input.is_action_pressed(\"down\") or Input.is_action_pressed(\"up\"):
+		curAnim = RUN
+	else:
+		curAnim = IDLE
+
+	if input_dir != Vector3.ZERO and camera_node != null:
+		input_dir = input_dir.normalized()
+
+		var cam_forward = -camera_node.global_transform.basis.z
+		cam_forward.y = 0
+		cam_forward = cam_forward.normalized()
+
+		var cam_right = camera_node.global_transform.basis.x
+		cam_right.y = 0
+		cam_right = cam_right.normalized()
+
+		var move_dir = (cam_forward * -input_dir.z + cam_right * input_dir.x).normalized()
+
+		var target_rotation_y = atan2(move_dir.x, move_dir.z)
+		rotation.y = lerp_angle(rotation.y, target_rotation_y, rotation_speed * delta)
+
+		velocity.x = move_dir.x * move_speed
+		velocity.z = move_dir.z * move_speed
+	else:
+		velocity.x = 0
+		velocity.z = 0
+
+	if not is_on_floor():
+		velocity.y += gravity * delta
+	else:
+		velocity.y = 0
+		if Input.is_action_just_pressed(\"ui_accept\"):
+			velocity.y = jump_speed
+			jump()
+		elif Input.is_action_just_pressed(\"ui_roll\"):
+			roll()
+
+	move_and_slide()
+"
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_vimb2"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_cg8dm"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_8w0v3"]
+
+[node name="World" type="Node3D"]
+transform = Transform3D(1.0025, 0, 0, 0, 1.0025, 0, 0, 0, 1.0025, 0, 0, 0)
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_pwwfg")
+
+[node name="Map" type="Node3D" parent="."]
+
+[node name="Floor" type="CSGBox3D" parent="Map"]
+transform = Transform3D(0.986177, 0, 0, 0, 0.986177, 0, 0, 0, 0.986177, 0.00688756, -2.38419e-07, -0.00198376)
+material_override = SubResource("StandardMaterial3D_rcan8")
+use_collision = true
+size = Vector3(1000, 0.1, 1000)
+
+[node name="FINAL SKELETON" parent="." instance=ExtResource("2_pwwfg")]
+transform = Transform3D(-0.126666, 0, 1.10735e-08, 0, 0.126666, 0, -1.10735e-08, 0, -0.126666, -0.00148212, 1.0218, 0.0157269)
+script = SubResource("GDScript_pwwfg")
+
+[node name="camera_node_path" type="Node3D" parent="." groups=["camera_node_path"]]
+transform = Transform3D(0.999999, 0, -0.000715732, 0, 0.999999, 0, 0.000715732, 0, 0.999999, -0.0123316, 2.99646, 0.0581704)
+script = ExtResource("3_rcan8")
+
+[node name="SpringArm3D" type="SpringArm3D" parent="camera_node_path"]
+collision_mask = 2
+spring_length = 5.0
+
+[node name="Camera3D" type="Camera3D" parent="camera_node_path/SpringArm3D"]
+transform = Transform3D(0.997507, -4.87773e-05, -1.66788e-06, 4.87773e-05, 0.995176, 0.0681585, -1.66893e-06, -0.0681585, 0.995176, 0.0020422, 3.19301, 4.91015)
+
+[node name="LookAt" type="Node3D" parent="camera_node_path"]
+transform = Transform3D(1, 0, 1.74623e-10, 0, 1, 0, -1.74623e-10, 0, 1, -0.00476999, 0, -6.66449)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+transform = Transform3D(6.34759, 0, 0, 0, 6.34759, 0, 0, 0, 6.34759, -7.70559, 2.71486, 0)
+material_override = SubResource("StandardMaterial3D_vimb2")
+mesh = SubResource("BoxMesh_cg8dm")
+
+[node name="StaticBody3D" type="StaticBody3D" parent="MeshInstance3D"]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="MeshInstance3D/StaticBody3D"]
+shape = SubResource("BoxShape3D_8w0v3")
